@@ -1,0 +1,8 @@
+scikit-image
+scikit-learn
+matplotlib
+tqdm
+albumentations==1.2.1
+fvcore
+gpustat
+numpy==1.25.3

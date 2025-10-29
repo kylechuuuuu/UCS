@@ -1,9 +1,7 @@
 import torch
 from torch import nn
 from torch.nn import functional as F
-
 from typing import List, Tuple, Type
-
 from .common import LayerNorm2d
 import pdb
 from sklearn.decomposition import PCA
@@ -73,27 +71,9 @@ class MaskDecoder(nn.Module):
         self.hf_token = nn.Embedding(1, transformer_dim) # HQ-Ouptput-Token
         self.hf_mlp = MLP(transformer_dim, transformer_dim, transformer_dim // 8, 3) # corresponding new MLP layer for HQ-Ouptput-Token
         self.num_mask_tokens = self.num_mask_tokens + 1
-        # three conv fusion layers for obtaining HQ-Feature
-        self.compress_vit_feat = nn.Sequential(
-                                        nn.ConvTranspose2d(vit_dim, transformer_dim, kernel_size=2, stride=2),
-                                        LayerNorm2d(transformer_dim),
-                                        nn.GELU(), 
-                                        nn.ConvTranspose2d(transformer_dim, transformer_dim // 8, kernel_size=2, stride=2))
         
-        self.embedding_encoder = nn.Sequential(
-                                        nn.ConvTranspose2d(transformer_dim, transformer_dim // 4, kernel_size=2, stride=2),
-                                        LayerNorm2d(transformer_dim // 4),
-                                        nn.GELU(),
-                                        nn.ConvTranspose2d(transformer_dim // 4, transformer_dim // 8, kernel_size=2, stride=2),
-                                    )
-        self.embedding_maskfeature = nn.Sequential(
-                                        nn.Conv2d(transformer_dim // 8, transformer_dim // 4, 3, 1, 1), 
-                                        LayerNorm2d(transformer_dim // 4),
-                                        nn.GELU(),
-                                        nn.Conv2d(transformer_dim // 4, transformer_dim // 8, 3, 1, 1))
-
         #============================
-        self.pca_fc = nn.Linear(self.num_mask_tokens**2, transformer_dim)
+        self.pca_fc = nn.Linear(self.num_mask_tokens**2,transformer_dim)
         #============================
 
     def forward(
@@ -121,20 +101,17 @@ class MaskDecoder(nn.Module):
           torch.Tensor: batched predicted masks
           torch.Tensor: batched predictions of mask quality
         """
+
         #v3--------------
         vit_features = interm_embeddings[0].permute(0, 3, 1, 2)+interm_embeddings[-1].permute(0, 3, 1, 2)
         #--------------------------------------------------------
-        
-        
-        
-        hq_features = self.embedding_encoder(image_embeddings) + self.compress_vit_feat(vit_features)
 
         masks, iou_pred = self.predict_masks(
             image_embeddings=image_embeddings,
             image_pe=image_pe,
             sparse_prompt_embeddings=sparse_prompt_embeddings,
             dense_prompt_embeddings=dense_prompt_embeddings,
-            hq_features=hq_features,
+            hq_features=None,
         )
 
         # Select the correct mask or masks for output
@@ -189,8 +166,6 @@ class MaskDecoder(nn.Module):
         src = src.transpose(1, 2).view(b, c, h, w)
 
         upscaled_embedding_sam = self.output_upscaling(src)
-        upscaled_embedding_hq = self.embedding_maskfeature(upscaled_embedding_sam) + hq_features.repeat(b,1,1,1)
-
         #=============================================================
         pca_list: List[torch.Tensor] = []
         pca = PCA(n_components=mask_tokens_out.shape[1]) 
@@ -200,7 +175,7 @@ class MaskDecoder(nn.Module):
             pca_list.append(pca_feature_)
         pca_feature = torch.cat(pca_list, dim=0)
         #===================================================================================PCA
-        
+ 
         hyper_in_list: List[torch.Tensor] = []
         
         for i in range(self.num_mask_tokens):
@@ -218,21 +193,18 @@ class MaskDecoder(nn.Module):
                 hyper_in_list.append(self.hf_mlp(concatenated_tensor))
                 
                 #========================================
+    
 
         hyper_in = torch.stack(hyper_in_list, dim=1)
         b, c, h, w = upscaled_embedding_sam.shape
         
-        masks_sam = (hyper_in[:,:self.num_mask_tokens-1] @ upscaled_embedding_sam.view(b, c, h * w)).view(b, -1, h, w)
-        masks_sam_hq = (hyper_in[:,self.num_mask_tokens-1:] @ upscaled_embedding_hq.view(b, c, h * w)).view(b, -1, h, w)
-        masks = torch.cat([masks_sam,masks_sam_hq],dim=1)
-        # Generate mask quality predictions
+        masks_sam = (hyper_in[:,:self.num_mask_tokens] @ upscaled_embedding_sam.view(b, c, h * w)).view(b, -1, h, w)
         iou_pred = self.iou_prediction_head(iou_token_out)
+        
+        return masks_sam, iou_pred
 
-        return masks, iou_pred
 
 
-# Lightly adapted from
-# https://github.com/facebookresearch/MaskFormer/blob/main/mask_former/modeling/transformer/transformer_predictor.py # noqa
 class MLP(nn.Module):
     def __init__(
         self,

@@ -1,7 +1,6 @@
 from segment_anything import sam_model_registry, SamPredictor
 import torch.nn as nn
 import torch
-torch.autograd.set_detect_anomaly(True)
 import argparse
 import os
 from torch import optim

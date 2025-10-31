@@ -23,7 +23,7 @@ def parse_args():
     parser.add_argument("--batch_size", type=int, default=1, help="train batch size")
     parser.add_argument("--image_size", type=int, default=1024, help="image_size")
     parser.add_argument("--mask_num", type=int, default=1, help="get mask number")
-    parser.add_argument("--data_path", type=str, default="/hy-tmp/UCS/datasets/mini_uniform", help="train data path") 
+    parser.add_argument("--data_path", type=str, default="/hy-tmp/UCS/datasets/uniformv6_data", help="train data path") 
     parser.add_argument("--metrics", nargs='+', default=['iou', 'dice'], help="metrics")
     parser.add_argument('--device', type=str, default='cuda')
     parser.add_argument("--lr", type=float, default=1e-4, help="learning rate")
@@ -113,13 +113,6 @@ def train_one_epoch(args, model, optimizer, train_loader, epoch, criterion):
     train_loader = tqdm(train_loader)
     train_losses = []
     train_iter_metrics = [0] * len(args.metrics)
-
-    for n, value in model.image_encoder.named_parameters():
-        # if "Adapter" in n:  cyx
-        if "Adapter" in n or "neck" in n or "prompt_generator" in n:   #lds
-            value.requires_grad = True
-        else:
-            value.requires_grad = False
 
     for batch, batched_input in enumerate(train_loader):
             batched_input = stack_dict_batched(batched_input)
@@ -212,7 +205,21 @@ def train_one_epoch(args, model, optimizer, train_loader, epoch, criterion):
 
 
 def main(args):
-    model = sam_model_registry[args.model_type](args).to(args.device)          
+    model = sam_model_registry[args.model_type](args).to(args.device)
+
+    for name, param in model.prompt_encoder.named_parameters():
+        param.requires_grad = False
+    
+    for name, param in model.image_encoder.named_parameters():
+        if "Adapter" in name or "neck" in name or "prompt_generator" in name:
+            param.requires_grad = True
+        else:
+            param.requires_grad = False
+
+    for n,value in model.named_parameters():
+        print(f"{n}:{value.requires_grad}")
+
+    
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
     criterion = FocalDiceloss_IoULoss()
 
@@ -256,7 +263,7 @@ def main(args):
         if float(train_metrics['dice'])>best_metrics:
             best_metrics = float(train_metrics['dice'])
             print (f'best_mestric:======{best_metrics}======')
-            save_path = os.path.join(args.work_dir, "models", args.run_name, f'{args.save_path_bmt}_{epoch}.pth')#=============================================
+            save_path = os.path.join(args.work_dir, "models", args.run_name, f'{args.save_path_bmt}_{epoch}.pth')
             state = {'model': model.float().state_dict(), 'optimizer': optimizer}
             torch.save(state, save_path)
 
